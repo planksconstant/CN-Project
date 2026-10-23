@@ -94,12 +94,25 @@ def serve(port):
 
 
 if __name__ == "__main__":
+    from . import resmgr, service
+    from .server import ReservationServer
+
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=6653)
+    ap.add_argument("--port", type=int, default=6653, help="OpenFlow listen port")
+    ap.add_argument("--res-host", default="127.0.0.1")
+    ap.add_argument("--res-port", type=int, default=9000, help="reservation TCP port")
     ap.add_argument("--debug", action="store_true")
     a = ap.parse_args()
     logging.basicConfig(level=logging.DEBUG if a.debug else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
+
+    topo = resmgr.diamond()
+    mgr = resmgr.ResourceManager(topo)
+    svc = service.ReservationService(mgr, service.LogInstaller(topo))   # step 7: real installer
+    svc.run_ticker()
+    rs = ReservationServer(svc, a.res_host, a.res_port)
+    threading.Thread(target=rs.serve_forever, daemon=True, name="reservations").start()
+    log.info("reservation server on %s:%d", a.res_host, rs.port)
     try:
         serve(a.port)
     except KeyboardInterrupt:
