@@ -247,7 +247,7 @@ def flow_mod(match_=None, instructions=(), command=OFPFC_ADD, priority=0,
 # ---------------------------------------------------------------- meter_mod (step 4)
 def meter_mod(meter_id, rate_kbps=0, burst_kb=0, command=OFPMC_ADD, xid=0):
     """Single drop band, kbps. For DELETE, bands are omitted."""
-    flags = OFPMF_KBPS | (OFPMF_BURST if burst_kb else 0)
+    flags = OFPMF_KBPS | OFPMF_STATS | (OFPMF_BURST if burst_kb else 0)
     body = struct.pack("!HHI", command, flags, meter_id)
     if command != OFPMC_DELETE:
         body += struct.pack("!HHII4x", OFPMBT_DROP, 16, rate_kbps, burst_kb)
@@ -281,3 +281,55 @@ def peek_eth(data):
         return None
     dst, src, et = struct.unpack("!6s6sH", data[:14])
     return fmt_mac(dst), fmt_mac(src), et
+
+
+# ---------------------------------------------------------------- multipart stats (step 8)
+OFPMP_FLOW = 1
+OFPMP_PORT_STATS = 4
+OFPMP_METER = 9
+OFPM_ALL = 0xFFFFFFFF
+
+
+def multipart_request(mp_type, body=b"", xid=0):
+    return pack_msg(OFPT_MULTIPART_REQUEST, struct.pack("!HH4x", mp_type, 0) + body, xid)
+
+
+def port_stats_request(port=OFPP_ANY, xid=0):
+    return multipart_request(OFPMP_PORT_STATS, struct.pack("!I4x", port), xid)
+
+
+def meter_stats_request(meter_id=OFPM_ALL, xid=0):
+    return multipart_request(OFPMP_METER, struct.pack("!I4x", meter_id), xid)
+
+
+def parse_multipart_reply(body):
+    """-> (mp_type, flags, payload)"""
+    mp_type, flags = struct.unpack_from("!HH", body, 0)
+    return mp_type, flags, body[8:]
+
+
+_PORT_STATS = struct.Struct("!I4x12QII")      # 112 bytes per port
+
+
+def parse_port_stats(data):
+    out = []
+    for off in range(0, len(data) - _PORT_STATS.size + 1, _PORT_STATS.size):
+        v = _PORT_STATS.unpack_from(data, off)
+        out.append({"port": v[0], "rx_packets": v[1], "tx_packets": v[2],
+                    "rx_bytes": v[3], "tx_bytes": v[4], "rx_dropped": v[5],
+                    "tx_dropped": v[6], "duration_sec": v[13]})
+    return out
+
+
+def parse_meter_stats(data):
+    """Each entry: 40-byte header + 16 bytes (packets, bytes) per band."""
+    out, off = [], 0
+    while off + 40 <= len(data):
+        mid, ln, flows, pkts, byts, _ds, _dn = struct.unpack_from("!IH6xIQQII", data, off)
+        if ln < 40:
+            break
+        bands = [struct.unpack_from("!QQ", data, b) for b in range(off + 40, off + ln, 16)]
+        out.append({"meter_id": mid, "flow_count": flows, "packet_in": pkts,
+                    "byte_in": byts, "bands": bands})
+        off += ln
+    return out

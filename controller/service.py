@@ -49,8 +49,10 @@ class ReservationService:
                 try:
                     self.installer.install(r)
                     self._installed.add(r.id)
-                except Exception:
-                    log.exception("install failed rid=%d", r.id)
+                except Exception as e:
+                    log.error("install failed rid=%d (%s): cancelling", r.id, e)
+                    self.mgr.cancel(r.id)
+                    self.mgr.counts["install_failed"] += 1
 
     def _remove(self, r):
         try:
@@ -90,20 +92,32 @@ class ReservationService:
 
     def _cmd_reserve(self, a):
         # RESERVE <src_ip> <dst_ip> <kbps> <start_in_sec> <duration_sec>
-        if len(a) != 5:
+        # optional 6th arg: <tcp|udp>/<dst_port> narrows the reservation to one flow
+        if len(a) not in (5, 6):
             return self._malformed()
         try:
             kbps, start_in, dur = float(a[2]), float(a[3]), float(a[4])
+            flow = None
+            if len(a) == 6:
+                proto, port = a[5].lower().split("/")
+                flow = (proto, int(port))
         except ValueError:
             return self._malformed()
         if not all(math.isfinite(x) for x in (kbps, start_in, dur)):
             return self._malformed()
         with self.mgr.lock:
             now = self.clock()
-            res = self.mgr.reserve(a[0], a[1], kbps, now + start_in, now + start_in + dur, now=now)
+            res = self.mgr.reserve(a[0], a[1], kbps, now + start_in, now + start_in + dur,
+                                   now=now, flow=flow)
             if not res.ok:
                 return ["REJECT " + res.reason]
             self.sync()                    # start_in == 0 -> activate right away
+            if self.mgr.get(res.rid).state == "CANCELLED":     # installer refused it
+                c = self.mgr.counts
+                c["accepted"] -= 1
+                c["rejected"] += 1
+                c["reason:INSTALL_FAILED"] += 1
+                return ["REJECT INSTALL_FAILED"]
             return ["OK %d %s" % (res.rid, "-".join(res.path))]
 
     def _cmd_cancel(self, a):
@@ -122,9 +136,10 @@ class ReservationService:
             return ["OK"]
 
     def _fmt(self, r, now):
-        return "%d %s %s %s %g %.1f %.1f %s" % (
+        return "%d %s %s %s %g %.1f %.1f %s %s" % (
             r.id, r.state, r.src_ip, r.dst_ip, r.kbps,
-            r.start - now, r.end - now, "-".join(r.path))
+            r.start - now, r.end - now, "-".join(r.path),
+            "%s/%d" % r.flow if r.flow else "-")
 
     def _cmd_status(self, a):
         # -> OK <id> <state> <src> <dst> <kbps> <start_in> <end_in> <path>
