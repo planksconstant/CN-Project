@@ -31,9 +31,12 @@ class LineReader:
 
 
 class ReservationServer:
-    def __init__(self, service, host="127.0.0.1", port=9000, idle_timeout=60):
+    def __init__(self, service, host="127.0.0.1", port=9000, idle_timeout=60, max_clients=256):
         self.service = service
         self.idle_timeout = idle_timeout
+        self.max_clients = max_clients              # beyond this a client gets "ERR BUSY" and is closed
+        self._active = 0
+        self._alock = threading.Lock()
         self.srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.srv.bind((host, port))
@@ -46,6 +49,17 @@ class ReservationServer:
                 conn, addr = self.srv.accept()
             except OSError:
                 return                              # closed
+            with self._alock:
+                busy = self._active >= self.max_clients
+                if not busy:
+                    self._active += 1
+            if busy:
+                try:
+                    conn.sendall(b"ERR BUSY\n")
+                except OSError:
+                    pass
+                conn.close()
+                continue
             threading.Thread(target=self._client, args=(conn, addr), daemon=True).start()
 
     def close(self):
@@ -77,3 +91,5 @@ class ReservationServer:
             pass
         finally:
             conn.close()
+            with self._alock:
+                self._active -= 1

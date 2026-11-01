@@ -28,17 +28,26 @@ class Switch:
     def recv(self):
         return of13.recv_msg(self.sock)
 
-    def barrier(self, timeout=1.0):
-        """Block until the switch has processed everything sent before this call.
-        Must NOT be called from this switch's reader thread (it delivers the reply)."""
+    def barrier_start(self):
+        """Send a barrier request; returns (xid, event) to pass to barrier_wait()."""
         xid = self.xid()
         ev = threading.Event()
         self._barriers[xid] = ev
+        self.send(of13.barrier_request(xid))
+        return xid, ev
+
+    def barrier_wait(self, xid, ev, timeout=1.0):
+        """True once the switch has processed everything sent before the barrier."""
         try:
-            self.send(of13.barrier_request(xid))
             return ev.wait(timeout)
         finally:
             self._barriers.pop(xid, None)
+
+    def barrier(self, timeout=1.0):
+        """Send a barrier and wait for it. Must NOT be called from this switch's reader thread
+        (that thread delivers the reply)."""
+        xid, ev = self.barrier_start()
+        return self.barrier_wait(xid, ev, timeout)
 
     def on_barrier_reply(self, xid):
         ev = self._barriers.get(xid)

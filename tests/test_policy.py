@@ -26,8 +26,9 @@ class Clock:
 
 
 class FakeSwitch:
-    def __init__(self, dpid):
+    def __init__(self, dpid, trace=None):
         self.dpid, self.ready = dpid, True
+        self.trace = trace if trace is not None else []
         self.sent, self.errors = [], collections.deque()
         self._x, self.barrier_ok, self.fail_flow = 0, True, False
 
@@ -42,6 +43,14 @@ class FakeSwitch:
             self.errors.append((xid, 5, 0))
 
     def barrier(self, timeout=1.0):
+        return self.barrier_ok
+
+    def barrier_start(self):
+        self.trace.append(("start", self.dpid))
+        return 0, None
+
+    def barrier_wait(self, xid, ev, timeout=1.0):
+        self.trace.append(("wait", self.dpid))
         return self.barrier_ok
 
 

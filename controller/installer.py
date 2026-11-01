@@ -10,11 +10,13 @@ Must run on a non-reader thread (it waits for barrier replies).
 """
 import logging
 import math
+import time
 
 from . import of13
 
 log = logging.getLogger("inst")
 PRIO_PAIR, PRIO_FLOW = 200, 210      # host-pair reservation / single-flow (more specific) reservation
+BARRIER_TIMEOUT = 1.0                # seconds to wait for all switches to confirm
 GRACE = 5                            # seconds the hard_timeout outlives the reservation
 ALL_COOKIE = 0xFFFFFFFFFFFFFFFF
 
@@ -65,8 +67,10 @@ class OFInstaller:
                 sent[i].append(x)
                 sw.send(of13.flow_mod(match, insts, priority=prio, cookie=r.id,
                                       hard_timeout=hard, xid=x))
-            for sw, xids in zip(sws, sent):                   # confirm: barrier, then look for errors
-                if not sw.barrier():
+            pending = [(sw, xids) + sw.barrier_start() for sw, xids in zip(sws, sent)]
+            deadline = time.monotonic() + BARRIER_TIMEOUT      # one budget for all switches together
+            for sw, xids, bx, ev in pending:                   # confirm: barrier, then look for errors
+                if not sw.barrier_wait(bx, ev, max(0.05, deadline - time.monotonic())):
                     raise InstallError("barrier timeout on dpid %d" % sw.dpid)
                 bad = [e for e in sw.errors if e[0] in xids]
                 if bad:

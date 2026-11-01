@@ -52,7 +52,11 @@ class ReservationService:
                 except Exception as e:
                     log.error("install failed rid=%d (%s): cancelling", r.id, e)
                     self.mgr.cancel(r.id)
-                    self.mgr.counts["install_failed"] += 1
+                    c = self.mgr.counts                      # it was counted as accepted when admitted
+                    c["accepted"] -= 1
+                    c["rejected"] += 1
+                    c["reason:INSTALL_FAILED"] += 1
+                    c["install_failed"] += 1
 
     def _remove(self, r):
         try:
@@ -112,11 +116,7 @@ class ReservationService:
             if not res.ok:
                 return ["REJECT " + res.reason]
             self.sync()                    # start_in == 0 -> activate right away
-            if self.mgr.get(res.rid).state == "CANCELLED":     # installer refused it
-                c = self.mgr.counts
-                c["accepted"] -= 1
-                c["rejected"] += 1
-                c["reason:INSTALL_FAILED"] += 1
+            if self.mgr.get(res.rid).state == "CANCELLED":     # installer refused it (counted in sync)
                 return ["REJECT INSTALL_FAILED"]
             return ["OK %d %s" % (res.rid, "-".join(res.path))]
 
